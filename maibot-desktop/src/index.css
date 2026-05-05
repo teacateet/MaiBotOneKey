@@ -1,0 +1,46 @@
+:root {
+  --bg-color: #edf1f5;
+  --panel-color: rgba(253, 252, 249, 0.92);
+  --border-color: rgba(15, 23, 42, 0.12);
+  --title-color: #111827;
+  --text-color: #334155;
+  --muted-color: #6b7280;
+  --accent-color: #2a68a3;
+  --panel-shadow:
+    0 24px 80px rgba(15, 23, 42, 0.08),
+    0 8px 24px rgba(15, 23, 42, 0.06);
+  --display-font: "Segoe UI Variable Display", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --body-font: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --mono-font: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  color: var(--text-color);
+  background:
+    radial-gradient(circle at top left, rgba(247, 181, 71, 0.18), transparent 24%),
+    radial-gradient(circle at right 20%, rgba(42, 104, 163, 0.18), transparent 22%),
+    linear-gradient(180deg, #f7f5ef 0%, #edf1f5 100%);
+  font: 16px/1.5 var(--body-font);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
