@@ -199,3 +199,6 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 .ace-tool/
+.codex-encoding-test-applypatch.txt
+DESKTOP_UNUSED_BY_DEFAULT.txt
+backup_snapshots/
