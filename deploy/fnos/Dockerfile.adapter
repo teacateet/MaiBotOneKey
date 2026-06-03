@@ -1,0 +1,20 @@
+# NapCat 适配器（adapter）镜像 —— 飞牛/Linux x86_64 专用
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    TZ=Asia/Shanghai
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /adapters
+
+COPY modules/MaiBot-Napcat-Adapter/requirements.txt ./requirements.txt
+RUN uv pip install --system --upgrade pip \
+    && uv pip install --system -r requirements.txt
+
+COPY modules/MaiBot-Napcat-Adapter/ .
+
+EXPOSE 8095
+
+ENTRYPOINT ["python", "main.py"]

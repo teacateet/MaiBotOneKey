@@ -11,18 +11,23 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const MAX_LOG_LINES: usize = 1200;
 const SYSTEM_SCAN_CACHE_TTL: Duration = Duration::from_secs(15);
+const VOICE_TEMP_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 static SHARED_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static DESKTOP_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static SYSTEM_SCAN_CACHE: OnceLock<Mutex<Option<SystemScan>>> = OnceLock::new();
+static VOICE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(target_os = "windows")]
 fn hide_command_window(command: &mut Command) {
@@ -104,6 +109,51 @@ struct LoginStabilityReport {
     status: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default, rename_all = "camelCase")]
+struct LoginHelperConfig {
+    recipient_email: String,
+    smtp_host: String,
+    smtp_port: u16,
+    smtp_username: String,
+    smtp_password: String,
+    smtp_from: String,
+    smtp_use_ssl: bool,
+}
+
+impl Default for LoginHelperConfig {
+    fn default() -> Self {
+        Self {
+            recipient_email: "2418749618@qq.com".to_string(),
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_from: String::new(),
+            smtp_use_ssl: true,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginHelperStatus {
+    maibot_webui_url: String,
+    maibot_access_token: String,
+    napcat_webui_url: String,
+    napcat_token: String,
+    qq_account: Option<String>,
+    mail_configured: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendLoginEmailRequest {
+    config: LoginHelperConfig,
+    include_maibot: bool,
+    include_napcat: bool,
+}
+
 struct ManagedProcess {
     child: Option<Child>,
     logs: Arc<Mutex<VecDeque<String>>>,
@@ -121,6 +171,56 @@ impl ManagedProcess {
 #[derive(Default)]
 struct ProcessRegistry {
     handles: Mutex<HashMap<String, ManagedProcess>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MaicraftConfig {
+    host: String,
+    port: u16,
+    version: String,
+    username: String,
+    auth: String,
+    forge_modern: bool,
+    keep_alive_timeout: u32,
+    goal: String,
+    forge_client_path: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct ForgeBridgeCommandRequest {
+    action: String,
+    forward: Option<bool>,
+    back: Option<bool>,
+    left: Option<bool>,
+    right: Option<bool>,
+    sprint: Option<bool>,
+    sneak: Option<bool>,
+    duration: Option<u64>,
+    yaw: Option<f32>,
+    pitch: Option<f32>,
+    targets: Option<String>,
+    radius: Option<u16>,
+    timeout: Option<u64>,
+    x: Option<i32>,
+    y: Option<i32>,
+    z: Option<i32>,
+    length: Option<u16>,
+    width: Option<u16>,
+    height: Option<u16>,
+    depth: Option<u16>,
+    input: Option<String>,
+    fuel: Option<String>,
+    block: Option<String>,
+    search: Option<String>,
+    model: Option<String>,
+    model_id: Option<String>,
+    texture: Option<String>,
+    texture_id: Option<String>,
+    target: Option<String>,
+    ignore_auth: Option<bool>,
+    command: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -144,7 +244,16 @@ struct VoiceChatConfig {
     tts_prompt_text: String,
     tts_prompt_lang: String,
     output_language: String,
+    input_device_id: String,
+    input_device_label_pattern: String,
+    output_device_id: String,
+    output_device_label_pattern: String,
     max_history_turns: usize,
+    bilibili_room_id: String,
+    live_danmaku_reply_enabled: bool,
+    live_danmaku_cooldown_seconds: u64,
+    game_event_voice_enabled: bool,
+    game_event_voice_cooldown_seconds: u64,
 }
 
 impl Default for VoiceChatConfig {
@@ -167,14 +276,22 @@ impl Default for VoiceChatConfig {
             volc_asr_resource_id: "volc.seedasr.auc".to_string(),
             volc_asr_model: "bigmodel".to_string(),
             tts_api_url: "http://127.0.0.1:9880/tts".to_string(),
-            tts_ref_audio_path:
-                "E:\\cha shi bot\\伊蕾娜语音\\reference_audio\\伊蕾娜语音参考\\1.mp3".to_string(),
+            tts_ref_audio_path: String::new(),
             tts_prompt_text:
                 "視線を少し下にずらすと、門が見えました。私はそこにほうきを向かわせます。"
                     .to_string(),
             tts_prompt_lang: "ja".to_string(),
             output_language: "zh".to_string(),
+            input_device_id: String::new(),
+            input_device_label_pattern: String::new(),
+            output_device_id: String::new(),
+            output_device_label_pattern: "CABLE Input".to_string(),
             max_history_turns: 8,
+            bilibili_room_id: String::new(),
+            live_danmaku_reply_enabled: false,
+            live_danmaku_cooldown_seconds: 18,
+            game_event_voice_enabled: false,
+            game_event_voice_cooldown_seconds: 18,
         }
     }
 }
@@ -184,6 +301,15 @@ impl Default for VoiceChatConfig {
 struct VoiceChatRequest {
     audio_base64: String,
     mime_type: String,
+    config: VoiceChatConfig,
+    screen_context: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceTextTurnRequest {
+    text: String,
+    source_label: Option<String>,
     config: VoiceChatConfig,
     screen_context: Option<String>,
 }
@@ -358,6 +484,14 @@ fn napcat_root() -> PathBuf {
     }
 }
 
+fn bilibili_live_adapter_root() -> PathBuf {
+    standalone_root().join("MaiBot-Bilibili-Live-Adapter")
+}
+
+fn maicraft_next_root() -> PathBuf {
+    standalone_root().join("Maicraft-Next")
+}
+
 fn adapter_python_root(adapter: &Path) -> PathBuf {
     let standalone_python = standalone_maibot_root().join("runtime/python31211/bin/python.exe");
     if adapter.starts_with(standalone_root()) && standalone_python.exists() {
@@ -368,10 +502,39 @@ fn adapter_python_root(adapter: &Path) -> PathBuf {
 }
 
 fn windows_powershell_path() -> PathBuf {
+    let local_pwsh = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|path| path.join("Programs/PowerShell/7/pwsh.exe"));
+    if let Some(path) = local_pwsh {
+        if path.exists() {
+            return path;
+        }
+    }
+
+    let program_files = std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:/Program Files"));
+    let pwsh = program_files.join("PowerShell/7/pwsh.exe");
+    if pwsh.exists() {
+        return pwsh;
+    }
+
     std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("C:/Windows"))
         .join("System32/WindowsPowerShell/v1.0/powershell.exe")
+}
+
+fn node_exe_path() -> PathBuf {
+    let program_files = std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:/Program Files"));
+    let node = program_files.join("nodejs/node.exe");
+    if node.exists() {
+        node
+    } else {
+        PathBuf::from("node.exe")
+    }
 }
 
 fn read_qq_account() -> Option<String> {
@@ -405,6 +568,21 @@ fn build_process_specs() -> Vec<ProcessSpec> {
     let tts_dir = shared.join("Git/GPT-SoVITS-V2");
     let tts_launcher = tts_dir.join("start_elaina_api.ps1");
     let powershell = windows_powershell_path();
+    let bilibili_live = bilibili_live_adapter_root();
+    let bilibili_live_config = bilibili_live.join("config.toml");
+    let maicraft_next = maicraft_next_root();
+    let node = node_exe_path();
+    let maicraft_entry = maicraft_next.join("src/main.ts");
+    let forge_agent_entry = maicraft_next.join("src/forge_bridge_agent.ts");
+    let maicraft_tsx = maicraft_next.join("node_modules/tsx/dist/cli.mjs");
+    let maicraft_config = maicraft_next.join("config.toml");
+    let forge_client_path = load_maicraft_config_inner().forge_client_path;
+    let forge_client_work_dir = if forge_client_path.trim().is_empty() {
+        PathBuf::from("D:/mc/.minecraft/versions/1.20.1-Forge_47.4.20")
+    } else {
+        PathBuf::from(forge_client_path.trim())
+    };
+    let forge_client_launcher = standalone_root().join("launch_forge_client.ps1");
 
     let make_issue = |program: &Path, qq_required: bool| -> Option<String> {
         if !program.exists() {
@@ -477,6 +655,129 @@ fn build_process_specs() -> Vec<ProcessSpec> {
         },
     });
 
+    specs.push(ProcessSpec {
+        id: "bilibili-live",
+        name: "B站直播监听",
+        description:
+            "连接 B 站直播间，监听弹幕、礼物和进房事件。第一阶段只输出日志，不会影响 QQ 聊天链路。",
+        cwd: bilibili_live.clone(),
+        program: maibot_python.clone(),
+        args: vec!["main.py".to_string()],
+        listen_port: None,
+        issue: if !maibot_python.exists() {
+            Some(format!("找不到 Python: {}", maibot_python.display()))
+        } else if !bilibili_live.exists() {
+            Some(format!("找不到直播适配器目录: {}", bilibili_live.display()))
+        } else if !bilibili_live.join("main.py").exists() {
+            Some(format!(
+                "找不到直播适配器入口: {}",
+                bilibili_live.join("main.py").display()
+            ))
+        } else if !bilibili_live_config.exists() {
+            Some(format!(
+                "找不到直播适配器配置: {}",
+                bilibili_live_config.display()
+            ))
+        } else {
+            None
+        },
+    });
+
+    specs.push(ProcessSpec {
+        id: "maicraft-next",
+        name: "Maicraft Next 协议Bot（轻量）",
+        description: "轻量无界面协议 Bot，只适合原版、Paper、Spigot、Purpur 或兼容原版协议的服务器；需要 Forge/FML 握手的整合包服不能用它进入。",
+        cwd: maicraft_next.clone(),
+        program: node.clone(),
+        args: vec![
+            maicraft_tsx.display().to_string(),
+            maicraft_entry.display().to_string(),
+        ],
+        listen_port: Some(25114),
+        issue: if !node.exists() && node.file_name().and_then(|value| value.to_str()) != Some("node.exe") {
+            Some(format!("找不到 Node.js: {}", node.display()))
+        } else if !maicraft_next.exists() {
+            Some(format!("找不到 Maicraft Next 目录: {}", maicraft_next.display()))
+        } else if !maicraft_entry.exists() {
+            Some(format!("找不到 Maicraft Next 入口: {}", maicraft_entry.display()))
+        } else if !maicraft_tsx.exists() {
+            Some("Maicraft Next 依赖未安装，请先在游戏模块执行 npm install。".to_string())
+        } else if !maicraft_config.exists() {
+            Some(format!("找不到 Maicraft Next 配置: {}", maicraft_config.display()))
+        } else {
+            None
+        },
+    });
+
+    specs.push(ProcessSpec {
+        id: "forge-client",
+        name: "Minecraft Forge 真客户端",
+        description: "启动 D:\\mc\\.minecraft\\versions\\1.20.1-Forge_47.4.20 这个真实 Forge 客户端，并直连当前游戏服务器。需要 Forge/FML 握手的整合包服只能走这个入口。",
+        cwd: forge_client_work_dir.clone(),
+        program: powershell.clone(),
+        args: vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            forge_client_launcher.display().to_string(),
+        ],
+        listen_port: None,
+        issue: if !powershell.exists() {
+            Some(format!("找不到 PowerShell: {}", powershell.display()))
+        } else if !forge_client_work_dir.exists() {
+            Some(format!(
+                "找不到 Forge 客户端目录: {}",
+                forge_client_work_dir.display()
+            ))
+        } else if !forge_client_launcher.exists() {
+            Some(format!(
+                "找不到 Forge 客户端启动脚本: {}",
+                forge_client_launcher.display()
+            ))
+        } else {
+            None
+        },
+    });
+
+    specs.push(ProcessSpec {
+        id: "forge-agent",
+        name: "Forge 控制AI",
+        description:
+            "等待 Forge 真客户端里的本地桥接端口上线，然后把移动、转向、聊天等动作发给真实客户端。",
+        cwd: maicraft_next.clone(),
+        program: node.clone(),
+        args: vec![
+            maicraft_tsx.display().to_string(),
+            forge_agent_entry.display().to_string(),
+        ],
+        listen_port: None,
+        issue: if !node.exists()
+            && node.file_name().and_then(|value| value.to_str()) != Some("node.exe")
+        {
+            Some(format!("找不到 Node.js: {}", node.display()))
+        } else if !maicraft_next.exists() {
+            Some(format!(
+                "找不到 Maicraft Next 目录: {}",
+                maicraft_next.display()
+            ))
+        } else if !forge_agent_entry.exists() {
+            Some(format!(
+                "找不到 Forge 控制AI入口: {}",
+                forge_agent_entry.display()
+            ))
+        } else if !maicraft_tsx.exists() {
+            Some("Maicraft Next 依赖未安装，请先在游戏模块执行 npm install。".to_string())
+        } else if !maicraft_config.exists() {
+            Some(format!(
+                "找不到 Maicraft Next 配置: {}",
+                maicraft_config.display()
+            ))
+        } else {
+            None
+        },
+    });
+
     specs
 }
 
@@ -494,6 +795,18 @@ fn read_toml_value(path: &Path) -> Option<toml::Value> {
 
 fn voice_config_path() -> PathBuf {
     shared_root().join("maibot_desktop_voice.json")
+}
+
+fn login_helper_config_path() -> PathBuf {
+    shared_root().join("maibot_desktop_login_helper.json")
+}
+
+fn bilibili_live_config_path() -> PathBuf {
+    bilibili_live_adapter_root().join("config.toml")
+}
+
+fn maicraft_next_config_path() -> PathBuf {
+    maicraft_next_root().join("config.toml")
 }
 
 fn tts_plugin_config_path() -> PathBuf {
@@ -546,6 +859,206 @@ fn toml_i64(value: &toml::Value, path: &[&str]) -> Option<i64> {
     toml_lookup(value, path).and_then(toml::Value::as_integer)
 }
 
+fn default_maicraft_config() -> MaicraftConfig {
+    MaicraftConfig {
+        host: "localhost".to_string(),
+        port: 25565,
+        version: "1.20.1".to_string(),
+        username: "MaicraftBot".to_string(),
+        auth: "offline".to_string(),
+        forge_modern: true,
+        keep_alive_timeout: 120_000,
+        goal: "在 Minecraft 服务器里安全生存，并听从管理员指令".to_string(),
+        forge_client_path: "D:/mc/.minecraft/versions/1.20.1-Forge_47.4.20".to_string(),
+    }
+}
+
+fn split_maicraft_host_port(host: &str, fallback_port: u16) -> (String, u16) {
+    let trimmed = host.trim();
+    if let Some(without_prefix) = trimmed.strip_prefix('[') {
+        if let Some((addr, port_part)) = without_prefix.split_once("]:") {
+            if let Ok(port) = port_part.parse::<u16>() {
+                if port > 0 {
+                    return (addr.trim().to_string(), port);
+                }
+            }
+        }
+    }
+
+    if trimmed.matches(':').count() != 1 {
+        return (trimmed.to_string(), fallback_port);
+    }
+
+    let Some((host_part, port_part)) = trimmed.rsplit_once(':') else {
+        return (trimmed.to_string(), fallback_port);
+    };
+    let Ok(port) = port_part.parse::<u16>() else {
+        return (trimmed.to_string(), fallback_port);
+    };
+    if port == 0 || host_part.trim().is_empty() {
+        return (trimmed.to_string(), fallback_port);
+    }
+
+    (host_part.trim().to_string(), port)
+}
+
+fn normalize_maicraft_config_address(config: &mut MaicraftConfig) {
+    let (host, port) = split_maicraft_host_port(&config.host, config.port);
+    config.host = host;
+    config.port = port;
+}
+
+fn load_maicraft_config_inner() -> MaicraftConfig {
+    let mut config = default_maicraft_config();
+    if let Some(root) = read_toml_value(&maicraft_next_config_path()) {
+        if let Some(value) = toml_string(&root, &["minecraft", "host"]) {
+            config.host = value;
+        }
+        if let Some(value) = toml_i64(&root, &["minecraft", "port"]) {
+            if (1..=65535).contains(&value) {
+                config.port = value as u16;
+            }
+        }
+        if let Some(value) = toml_string(&root, &["minecraft", "username"]) {
+            config.username = value;
+        }
+        if let Some(value) = toml_string(&root, &["minecraft", "version"]) {
+            config.version = value;
+        }
+        if let Some(value) = toml_string(&root, &["minecraft", "auth"]) {
+            config.auth = value;
+        }
+        if let Some(value) =
+            toml_lookup(&root, &["minecraft", "forge_modern"]).and_then(toml::Value::as_bool)
+        {
+            config.forge_modern = value;
+        }
+        if let Some(value) = toml_i64(&root, &["minecraft", "keep_alive_timeout"]) {
+            if (30_000..=600_000).contains(&value) {
+                config.keep_alive_timeout = value as u32;
+            }
+        }
+        if let Some(value) = toml_string(&root, &["agent", "goal"]) {
+            config.goal = value;
+        }
+        if let Some(value) = toml_string(&root, &["forge", "client_path"]) {
+            config.forge_client_path = value;
+        }
+    }
+    normalize_maicraft_config_address(&mut config);
+    config
+}
+
+fn ensure_toml_table<'a>(
+    table: &'a mut toml::map::Map<String, toml::Value>,
+    key: &str,
+) -> Result<&'a mut toml::map::Map<String, toml::Value>, String> {
+    let value = table
+        .entry(key.to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    if !value.is_table() {
+        *value = toml::Value::Table(toml::map::Map::new());
+    }
+    value
+        .as_table_mut()
+        .ok_or_else(|| format!("Maicraft 配置段 [{key}] 结构无效。"))
+}
+
+fn save_maicraft_config_inner(mut config: MaicraftConfig) -> Result<MaicraftConfig, String> {
+    config.host = config.host.trim().to_string();
+    config.version = config.version.trim().to_string();
+    config.username = config.username.trim().to_string();
+    config.auth = config.auth.trim().to_ascii_lowercase();
+    config.goal = config.goal.trim().to_string();
+    config.forge_client_path = config.forge_client_path.trim().to_string();
+    normalize_maicraft_config_address(&mut config);
+
+    if config.host.is_empty() {
+        return Err("Minecraft 服务器地址不能为空。".to_string());
+    }
+    if config.port == 0 {
+        return Err("Minecraft 端口必须在 1 到 65535 之间。".to_string());
+    }
+    if config.username.is_empty() {
+        return Err("Bot 游戏名不能为空。".to_string());
+    }
+    if !matches!(config.auth.as_str(), "offline" | "mojang" | "microsoft") {
+        return Err("登录模式只能是 offline、mojang 或 microsoft。".to_string());
+    }
+    if config.goal.is_empty() {
+        config.goal = default_maicraft_config().goal;
+    }
+    config.keep_alive_timeout = config.keep_alive_timeout.clamp(30_000, 600_000);
+
+    let path = maicraft_next_config_path();
+    let content = fs::read_to_string(&path).unwrap_or_default();
+    let mut root = content
+        .parse::<toml::Value>()
+        .unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()));
+
+    if !root.is_table() {
+        root = toml::Value::Table(toml::map::Map::new());
+    }
+
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "Maicraft 配置结构无效。".to_string())?;
+    let minecraft = ensure_toml_table(table, "minecraft")?;
+    minecraft.insert("host".to_string(), toml::Value::String(config.host.clone()));
+    minecraft.insert(
+        "port".to_string(),
+        toml::Value::Integer(i64::from(config.port)),
+    );
+    minecraft.insert(
+        "version".to_string(),
+        toml::Value::String(config.version.clone()),
+    );
+    minecraft.insert(
+        "username".to_string(),
+        toml::Value::String(config.username.clone()),
+    );
+    minecraft.insert("auth".to_string(), toml::Value::String(config.auth.clone()));
+    minecraft.insert(
+        "forge_modern".to_string(),
+        toml::Value::Boolean(config.forge_modern),
+    );
+    minecraft.insert(
+        "keep_alive_timeout".to_string(),
+        toml::Value::Integer(i64::from(config.keep_alive_timeout)),
+    );
+    minecraft
+        .entry("forge_fml_version".to_string())
+        .or_insert_with(|| toml::Value::String("FML3".to_string()));
+    minecraft
+        .entry("forge_mirror_server_mods".to_string())
+        .or_insert(toml::Value::Boolean(true));
+    minecraft
+        .entry("forge_mirror_server_channels".to_string())
+        .or_insert(toml::Value::Boolean(true));
+    minecraft
+        .entry("forge_extra_mods".to_string())
+        .or_insert_with(|| toml::Value::Array(Vec::new()));
+    minecraft
+        .entry("forge_extra_channels".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+
+    let agent = ensure_toml_table(table, "agent")?;
+    agent.insert("goal".to_string(), toml::Value::String(config.goal.clone()));
+
+    if !config.forge_client_path.is_empty() {
+        let forge = ensure_toml_table(table, "forge")?;
+        forge.insert(
+            "client_path".to_string(),
+            toml::Value::String(config.forge_client_path.clone()),
+        );
+    }
+
+    let updated =
+        toml::to_string_pretty(&root).map_err(|err| format!("序列化 Maicraft 配置失败: {err}"))?;
+    fs::write(&path, updated).map_err(|err| format!("写入 Maicraft 配置失败: {err}"))?;
+    Ok(config)
+}
+
 fn default_voice_chat_config() -> VoiceChatConfig {
     let mut config = VoiceChatConfig::default();
     if let Some(tts_config) = read_toml_value(&tts_plugin_config_path()) {
@@ -560,6 +1073,13 @@ fn default_voice_chat_config() -> VoiceChatConfig {
         }
         if let Some(value) = toml_string(&tts_config, &["vits", "prompt_lang"]) {
             config.tts_prompt_lang = value;
+        }
+    }
+    if let Some(live_config) = read_toml_value(&bilibili_live_config_path()) {
+        if let Some(room_id) = toml_i64(&live_config, &["bilibili", "room_id"]) {
+            if room_id > 0 {
+                config.bilibili_room_id = room_id.to_string();
+            }
         }
     }
     config.output_language = "zh".to_string();
@@ -600,8 +1120,33 @@ fn load_voice_chat_config_inner() -> VoiceChatConfig {
             if config.output_language.trim().is_empty() {
                 config.output_language = "zh".to_string();
             }
+            if config.input_device_id.trim().is_empty() {
+                config.input_device_id = String::new();
+            }
+            if config.output_device_id.trim().is_empty() {
+                config.output_device_id = String::new();
+            }
+            if config.output_device_label_pattern.trim().is_empty() {
+                config.output_device_label_pattern =
+                    VoiceChatConfig::default().output_device_label_pattern;
+            }
             if config.max_history_turns == 0 {
                 config.max_history_turns = 8;
+            }
+            if config.live_danmaku_cooldown_seconds == 0 {
+                config.live_danmaku_cooldown_seconds = 18;
+            }
+            if config.game_event_voice_cooldown_seconds == 0 {
+                config.game_event_voice_cooldown_seconds = 18;
+            }
+            if config.bilibili_room_id.trim().is_empty() {
+                if let Some(live_config) = read_toml_value(&bilibili_live_config_path()) {
+                    if let Some(room_id) = toml_i64(&live_config, &["bilibili", "room_id"]) {
+                        if room_id > 0 {
+                            config.bilibili_room_id = room_id.to_string();
+                        }
+                    }
+                }
             }
             return config;
         }
@@ -612,7 +1157,86 @@ fn load_voice_chat_config_inner() -> VoiceChatConfig {
 fn save_voice_chat_config_inner(config: &VoiceChatConfig) -> Result<(), String> {
     let content =
         serde_json::to_string_pretty(config).map_err(|err| format!("序列化语音配置失败: {err}"))?;
-    fs::write(voice_config_path(), content).map_err(|err| format!("写入语音配置失败: {err}"))
+    fs::write(voice_config_path(), content).map_err(|err| format!("写入语音配置失败: {err}"))?;
+    sync_bilibili_live_config(config)?;
+    Ok(())
+}
+
+fn load_login_helper_config_inner() -> LoginHelperConfig {
+    let path = login_helper_config_path();
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(mut config) = serde_json::from_str::<LoginHelperConfig>(&content) {
+            if config.recipient_email.trim().is_empty() {
+                config.recipient_email = LoginHelperConfig::default().recipient_email;
+            }
+            if config.smtp_port == 0 {
+                config.smtp_port = LoginHelperConfig::default().smtp_port;
+            }
+            return config;
+        }
+    }
+    LoginHelperConfig::default()
+}
+
+fn save_login_helper_config_inner(config: &LoginHelperConfig) -> Result<(), String> {
+    let mut normalized = config.clone();
+    normalized.recipient_email = normalize_owner_email(&normalized.recipient_email);
+    if normalized.smtp_from.trim().is_empty() && !normalized.smtp_username.trim().is_empty() {
+        normalized.smtp_from = normalized.smtp_username.trim().to_string();
+    }
+    if normalized.smtp_port == 0 {
+        normalized.smtp_port = LoginHelperConfig::default().smtp_port;
+    }
+
+    let content = serde_json::to_string_pretty(&normalized)
+        .map_err(|err| format!("序列化登录助手配置失败: {err}"))?;
+    fs::write(login_helper_config_path(), content)
+        .map_err(|err| format!("写入登录助手配置失败: {err}"))?;
+    Ok(())
+}
+
+fn sync_bilibili_live_config(config: &VoiceChatConfig) -> Result<(), String> {
+    let room_id_text = config.bilibili_room_id.trim();
+    if room_id_text.is_empty() {
+        return Ok(());
+    }
+    let room_id = room_id_text
+        .parse::<i64>()
+        .map_err(|_| "B站房间号必须是数字。".to_string())?;
+    if room_id <= 0 {
+        return Err("B站房间号必须大于 0。".to_string());
+    }
+
+    let path = bilibili_live_config_path();
+    if !path.exists() {
+        return Ok(());
+    }
+    let content =
+        fs::read_to_string(&path).map_err(|err| format!("读取直播适配器配置失败: {err}"))?;
+    let mut root = content
+        .parse::<toml::Value>()
+        .unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()));
+
+    if !root.is_table() {
+        root = toml::Value::Table(toml::map::Map::new());
+    }
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "直播适配器配置结构无效。".to_string())?;
+    let bilibili = table
+        .entry("bilibili".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    if !bilibili.is_table() {
+        *bilibili = toml::Value::Table(toml::map::Map::new());
+    }
+    bilibili
+        .as_table_mut()
+        .ok_or_else(|| "直播适配器 bilibili 配置结构无效。".to_string())?
+        .insert("room_id".to_string(), toml::Value::Integer(room_id));
+
+    let updated =
+        toml::to_string_pretty(&root).map_err(|err| format!("序列化直播适配器配置失败: {err}"))?;
+    fs::write(&path, updated).map_err(|err| format!("写入直播适配器配置失败: {err}"))
 }
 
 fn strip_data_url_prefix(value: &str) -> &str {
@@ -627,9 +1251,46 @@ fn unique_voice_temp_path(extension: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
+    let sequence = VOICE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
         .join("maibot-desktop-voice")
-        .join(format!("voice-{millis}.{extension}"))
+        .join(format!(
+            "voice-{millis}-{}-{sequence}.{extension}",
+            std::process::id()
+        ))
+}
+
+fn cleanup_stale_voice_temp_files(temp_dir: &Path) {
+    let Ok(entries) = fs::read_dir(temp_dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("voice-") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if now
+            .duration_since(modified)
+            .map(|age| age > VOICE_TEMP_MAX_AGE)
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn audio_extension_from_mime(mime_type: &str) -> &'static str {
@@ -661,6 +1322,7 @@ fn ffmpeg_path() -> PathBuf {
 fn convert_audio_to_wav(audio_bytes: &[u8], mime_type: &str) -> Result<Vec<u8>, String> {
     let temp_dir = std::env::temp_dir().join("maibot-desktop-voice");
     fs::create_dir_all(&temp_dir).map_err(|err| format!("创建临时目录失败: {err}"))?;
+    cleanup_stale_voice_temp_files(&temp_dir);
 
     let input_path = unique_voice_temp_path(audio_extension_from_mime(mime_type));
     let output_path = unique_voice_temp_path("wav");
@@ -857,7 +1519,7 @@ fn build_voice_reply_context(transcript: &str, screen_context: Option<&str>) -> 
         .filter(|value| !value.is_empty())
     {
         parts.push(format!(
-            "【当前桌面屏幕上下文】\n{screen}\n如果用户在问当前屏幕、游戏、软件或操作，就结合这个上下文回答；否则不要主动暴露无关屏幕信息。"
+            "【当前桌面屏幕上下文】\n{screen}\n这是实时语音对话的强参考信息。如果这里显示的是游戏或软件窗口，可以自然点出用户当前正在玩/操作的内容；当用户说“这个、这里、刚才、现在、怎么打、怎么弄”等指代时，优先结合这个上下文回答。不要频繁硬塞，也不要主动暴露无关隐私窗口。"
         ));
     }
     parts.join("\n\n")
@@ -1215,7 +1877,7 @@ async fn call_volcengine_submit_asr(
     let query_body = serde_json::json!({});
     let mut last_message = String::new();
     for _ in 0..30 {
-        thread::sleep(Duration::from_millis(600));
+        tokio::time::sleep(Duration::from_millis(600)).await;
         let response = client
             .post(query_url)
             .header("x-api-key", config.volc_asr_api_key.trim())
@@ -1313,6 +1975,7 @@ fn store_voice_turn_to_maibot_db(transcript: &str, reply_text: &str) -> Result<(
         .map(|duration| duration.as_secs_f64())
         .unwrap_or_default();
     let bot_name = bot_nickname();
+    let bot_id = read_qq_account().unwrap_or_else(|| "3955291569".to_string());
     let chat_id = "desktop_voice_chat";
     let chat_platform = "desktop_voice";
     let owner_id = "desktop_owner";
@@ -1334,37 +1997,43 @@ fn store_voice_turn_to_maibot_db(transcript: &str, reply_text: &str) -> Result<(
 
     insert_voice_message(
         &conn,
-        &format!("desktop_voice_user_{}", unique_message_suffix(now)),
-        now,
-        chat_id,
-        chat_platform,
-        owner_id,
-        owner_name,
-        owner_id,
-        owner_name,
-        transcript,
+        VoiceMessageInsert {
+            message_id: &format!("desktop_voice_user_{}", unique_message_suffix(now)),
+            timestamp: now,
+            chat_id,
+            chat_platform,
+            chat_user_id: owner_id,
+            chat_user_name: owner_name,
+            sender_id: owner_id,
+            sender_name: owner_name,
+            text: transcript,
+        },
     )?;
     insert_voice_message(
         &conn,
-        &format!("desktop_voice_bot_{}", unique_message_suffix(now + 0.001)),
-        now + 0.001,
-        chat_id,
-        chat_platform,
-        owner_id,
-        owner_name,
-        "3955291569",
-        &bot_name,
-        reply_text,
+        VoiceMessageInsert {
+            message_id: &format!("desktop_voice_bot_{}", unique_message_suffix(now + 0.001)),
+            timestamp: now + 0.001,
+            chat_id,
+            chat_platform,
+            chat_user_id: owner_id,
+            chat_user_name: owner_name,
+            sender_id: &bot_id,
+            sender_name: &bot_name,
+            text: reply_text,
+        },
     )?;
     insert_voice_memory(
         &conn,
-        now,
-        now + 0.001,
-        chat_id,
-        owner_name,
-        &bot_name,
-        transcript,
-        reply_text,
+        VoiceMemoryInsert {
+            start_time: now,
+            end_time: now + 0.001,
+            chat_id,
+            owner_name,
+            bot_name: &bot_name,
+            transcript,
+            reply_text,
+        },
     )?;
     Ok(())
 }
@@ -1373,18 +2042,19 @@ fn unique_message_suffix(time_value: f64) -> String {
     format!("{:.0}", time_value * 1000.0)
 }
 
-fn insert_voice_message(
-    conn: &Connection,
-    message_id: &str,
+struct VoiceMessageInsert<'a> {
+    message_id: &'a str,
     timestamp: f64,
-    chat_id: &str,
-    chat_platform: &str,
-    chat_user_id: &str,
-    chat_user_name: &str,
-    sender_id: &str,
-    sender_name: &str,
-    text: &str,
-) -> Result<(), String> {
+    chat_id: &'a str,
+    chat_platform: &'a str,
+    chat_user_id: &'a str,
+    chat_user_name: &'a str,
+    sender_id: &'a str,
+    sender_name: &'a str,
+    text: &'a str,
+}
+
+fn insert_voice_message(conn: &Connection, message: VoiceMessageInsert<'_>) -> Result<(), String> {
     conn.execute(
         "INSERT OR REPLACE INTO messages (
             message_id, time, chat_id, reply_to, interest_value, key_words, key_words_lite,
@@ -1406,31 +2076,36 @@ fn insert_voice_message(
             0, 0, 0, 0, 0, ''
         )",
         params![
-            message_id,
-            timestamp,
-            chat_id,
-            chat_platform,
-            chat_user_id,
-            chat_user_name,
-            sender_id,
-            sender_name,
-            text,
+            message.message_id,
+            message.timestamp,
+            message.chat_id,
+            message.chat_platform,
+            message.chat_user_id,
+            message.chat_user_name,
+            message.sender_id,
+            message.sender_name,
+            message.text,
         ],
     )
     .map_err(|err| format!("写入语音聊天消息失败: {err}"))?;
     Ok(())
 }
 
-fn insert_voice_memory(
-    conn: &Connection,
+struct VoiceMemoryInsert<'a> {
     start_time: f64,
     end_time: f64,
-    chat_id: &str,
-    owner_name: &str,
-    bot_name: &str,
-    transcript: &str,
-    reply_text: &str,
-) -> Result<(), String> {
+    chat_id: &'a str,
+    owner_name: &'a str,
+    bot_name: &'a str,
+    transcript: &'a str,
+    reply_text: &'a str,
+}
+
+fn insert_voice_memory(conn: &Connection, memory: VoiceMemoryInsert<'_>) -> Result<(), String> {
+    let owner_name = memory.owner_name;
+    let bot_name = memory.bot_name;
+    let transcript = memory.transcript;
+    let reply_text = memory.reply_text;
     let original_text = format!("{owner_name}: {transcript}\n{bot_name}: {reply_text}");
     let theme = format!("桌面语音对话：{}", truncate_chars(transcript, 36));
     let keywords = serde_json::json!(["桌面语音", "语音对话", owner_name, bot_name]).to_string();
@@ -1452,9 +2127,9 @@ fn insert_voice_memory(
             theme, keywords, summary, key_point, count, forget_times
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0)",
         params![
-            chat_id,
-            start_time,
-            end_time,
+            memory.chat_id,
+            memory.start_time,
+            memory.end_time,
             original_text,
             participants,
             theme,
@@ -1724,6 +2399,256 @@ fn detect_napcat_webui_url() -> String {
     }
 }
 
+fn parse_env_line(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let (left, right) = trimmed.split_once('=')?;
+        if left.trim() != key {
+            continue;
+        }
+        let value = right
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn detect_maibot_webui_url() -> String {
+    let default_host = "127.0.0.1".to_string();
+    let default_port = 8001u16;
+    let env_path = maibot_root().join(".env");
+    let content = fs::read_to_string(env_path).unwrap_or_default();
+    let host = parse_env_line(&content, "WEBUI_HOST").unwrap_or(default_host);
+    let normalized_host = match host.trim() {
+        "0.0.0.0" | "localhost" | "::" | "::1" => "127.0.0.1",
+        "" => "127.0.0.1",
+        other => other,
+    };
+    let port = parse_env_line(&content, "WEBUI_PORT")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(default_port);
+    format!("http://{normalized_host}:{port}")
+}
+
+fn detect_maibot_webui_access_token() -> String {
+    let token_path = maibot_root().join("data/webui.json");
+    read_json_value(&token_path)
+        .and_then(|value| {
+            value
+                .get("access_token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+fn extract_query_param(url: &str, key: &str) -> String {
+    let Some(query) = url.split_once('?').map(|(_, query)| query) else {
+        return String::new();
+    };
+    for pair in query.split('&') {
+        let (left, right) = pair.split_once('=').unwrap_or((pair, ""));
+        if left == key {
+            return right.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+fn normalize_owner_email(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("2418749618qq.com") {
+        "2418749618@qq.com".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn login_helper_mail_configured(config: &LoginHelperConfig) -> bool {
+    let recipient = normalize_owner_email(&config.recipient_email);
+    !recipient.is_empty()
+        && recipient.contains('@')
+        && !config.smtp_host.trim().is_empty()
+        && config.smtp_port > 0
+        && !config.smtp_username.trim().is_empty()
+        && !config.smtp_password.trim().is_empty()
+        && !config.smtp_from.trim().is_empty()
+}
+
+fn build_login_helper_status(config: &LoginHelperConfig) -> LoginHelperStatus {
+    let napcat_webui_url = detect_napcat_webui_url();
+    LoginHelperStatus {
+        maibot_webui_url: detect_maibot_webui_url(),
+        maibot_access_token: detect_maibot_webui_access_token(),
+        napcat_token: extract_query_param(&napcat_webui_url, "token"),
+        napcat_webui_url,
+        qq_account: read_qq_account(),
+        mail_configured: login_helper_mail_configured(config),
+    }
+}
+
+fn login_helper_email_body(
+    status: &LoginHelperStatus,
+    include_maibot: bool,
+    include_napcat: bool,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("MaiBot 登录助手检测到你可能需要远程处理登录或 WebUI Token。".to_string());
+    lines.push(String::new());
+    lines.push("注意：下面的 127.0.0.1 地址只适合在运行 bot 的这台电脑或远控窗口里打开，不能直接在手机浏览器打开。".to_string());
+    lines.push(
+        "如果 QQ / NapCat 要求手机确认，登录助手不能绕过 QQ 安全验证，只能帮你更快找到入口。"
+            .to_string(),
+    );
+    lines.push(String::new());
+    lines.push(format!(
+        "Bot QQ：{}",
+        status.qq_account.as_deref().unwrap_or("未读取")
+    ));
+    if include_maibot {
+        lines.push(String::new());
+        lines.push("[MaiBot WebUI]".to_string());
+        lines.push(format!("地址：{}", status.maibot_webui_url));
+        lines.push(format!(
+            "Access Token：{}",
+            if status.maibot_access_token.is_empty() {
+                "未读取"
+            } else {
+                &status.maibot_access_token
+            }
+        ));
+    }
+    if include_napcat {
+        lines.push(String::new());
+        lines.push("[NapCat WebUI]".to_string());
+        lines.push(format!("地址：{}", status.napcat_webui_url));
+        lines.push(format!(
+            "Token：{}",
+            if status.napcat_token.is_empty() {
+                "未读取"
+            } else {
+                &status.napcat_token
+            }
+        ));
+    }
+    lines.push(String::new());
+    lines.push("建议流程：远控电脑 -> 打开桌面端登录助手或上面的本机地址 -> 扫码 / 输入 Token -> 必要时执行“稳态重登准备”。".to_string());
+    lines.join("\n")
+}
+
+fn send_login_helper_email_inner(request: SendLoginEmailRequest) -> Result<String, String> {
+    let mut config = request.config;
+    config.recipient_email = normalize_owner_email(&config.recipient_email);
+    if config.smtp_from.trim().is_empty() && !config.smtp_username.trim().is_empty() {
+        config.smtp_from = config.smtp_username.trim().to_string();
+    }
+
+    if !request.include_maibot && !request.include_napcat {
+        return Err("至少选择 MaiBot WebUI 或 NapCat WebUI 中的一项。".to_string());
+    }
+    if !config.recipient_email.contains('@') {
+        return Err("收件邮箱格式不正确。".to_string());
+    }
+    if !login_helper_mail_configured(&config) {
+        return Err(
+            "邮件配置不完整：需要 SMTP 主机、端口、账号、授权码/密码、发件人和收件人。".to_string(),
+        );
+    }
+
+    save_login_helper_config_inner(&config)?;
+    let status = build_login_helper_status(&config);
+    let subject = format!(
+        "MaiBot 登录助手 - {}",
+        status.qq_account.as_deref().unwrap_or("未知QQ")
+    );
+    let body = login_helper_email_body(&status, request.include_maibot, request.include_napcat);
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$message = [System.Net.Mail.MailMessage]::new()
+try {
+  $message.From = [System.Net.Mail.MailAddress]::new($env:MAIBOT_LOGIN_SMTP_FROM)
+  $message.To.Add($env:MAIBOT_LOGIN_SMTP_TO)
+  $message.Subject = $env:MAIBOT_LOGIN_MAIL_SUBJECT
+  $message.SubjectEncoding = [System.Text.Encoding]::UTF8
+  $message.Body = $env:MAIBOT_LOGIN_MAIL_BODY
+  $message.BodyEncoding = [System.Text.Encoding]::UTF8
+  $client = [System.Net.Mail.SmtpClient]::new($env:MAIBOT_LOGIN_SMTP_HOST, [int]$env:MAIBOT_LOGIN_SMTP_PORT)
+  try {
+    $client.EnableSsl = [System.Convert]::ToBoolean($env:MAIBOT_LOGIN_SMTP_SSL)
+    $client.Timeout = 15000
+    $client.Credentials = [System.Net.NetworkCredential]::new($env:MAIBOT_LOGIN_SMTP_USER, $env:MAIBOT_LOGIN_SMTP_PASS)
+    $client.Send($message)
+  } finally {
+    $client.Dispose()
+  }
+} finally {
+  $message.Dispose()
+}
+"#;
+        let mut command = Command::new(windows_powershell_path());
+        hide_command_window(&mut command);
+        let output = command
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
+            .env("MAIBOT_LOGIN_SMTP_TO", &config.recipient_email)
+            .env("MAIBOT_LOGIN_SMTP_HOST", config.smtp_host.trim())
+            .env("MAIBOT_LOGIN_SMTP_PORT", config.smtp_port.to_string())
+            .env("MAIBOT_LOGIN_SMTP_USER", config.smtp_username.trim())
+            .env("MAIBOT_LOGIN_SMTP_PASS", config.smtp_password.trim())
+            .env("MAIBOT_LOGIN_SMTP_FROM", config.smtp_from.trim())
+            .env(
+                "MAIBOT_LOGIN_SMTP_SSL",
+                if config.smtp_use_ssl { "true" } else { "false" },
+            )
+            .env("MAIBOT_LOGIN_MAIL_SUBJECT", &subject)
+            .env("MAIBOT_LOGIN_MAIL_BODY", &body)
+            .output()
+            .map_err(|err| format!("调用 PowerShell 发送邮件失败: {err}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let detail = [stderr.trim(), stdout.trim()]
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join("；");
+            return Err(if detail.is_empty() {
+                "SMTP 发送失败，但 PowerShell 没有返回详细错误。".to_string()
+            } else {
+                format!("SMTP 发送失败: {detail}")
+            });
+        }
+
+        Ok(format!("登录邮件已发送到 {}", config.recipient_email))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("当前登录助手邮件发送只实现了 Windows 版本。".to_string())
+    }
+}
+
 fn parse_port(local_address: &str) -> Option<u16> {
     local_address
         .rsplit(':')
@@ -1803,7 +2728,7 @@ fn collect_windows_processes() -> Result<Vec<WindowsProcessInfo>, String> {
         let json_value: Value =
             serde_json::from_str(trimmed).map_err(|err| format!("解析系统进程列表失败: {err}"))?;
 
-        return match json_value {
+        match json_value {
             Value::Array(values) => values
                 .into_iter()
                 .map(|value| {
@@ -1815,7 +2740,7 @@ fn collect_windows_processes() -> Result<Vec<WindowsProcessInfo>, String> {
                 .map(|value| vec![value])
                 .map_err(|err| format!("解析进程信息失败: {err}")),
             _ => Ok(Vec::new()),
-        };
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2238,13 +3163,14 @@ fn attach_log_reader<R: Read + Send + 'static>(
 ) {
     thread::spawn(move || {
         let mut buffered = BufReader::new(reader);
-        let mut line = String::new();
+        let mut bytes = Vec::new();
 
         loop {
-            line.clear();
-            match buffered.read_line(&mut line) {
+            bytes.clear();
+            match buffered.read_until(b'\n', &mut bytes) {
                 Ok(0) => break,
                 Ok(_) => {
+                    let line = String::from_utf8_lossy(&bytes);
                     let clean = line.trim_end_matches(&['\r', '\n'][..]).trim();
                     if !clean.is_empty() {
                         push_log_line(&logs, format!("{prefix} {clean}"));
@@ -2460,7 +3386,9 @@ fn start_spec(spec: &ProcessSpec, handle: &mut ManagedProcess) -> Result<(), Str
         .env("FORCE_COLOR", "1")
         .env("CLICOLOR_FORCE", "1")
         .env("PY_COLORS", "1")
-        .env("TERM", "xterm-256color");
+        .env("TERM", "xterm-256color")
+        .env("MAIBOT_LEGACY_0X_UPGRADE_CONFIRMED", "1")
+        .env("MAIBOT_WEBUI_USE_LOCAL_DASHBOARD", "1");
 
     #[cfg(target_os = "windows")]
     {
@@ -2536,7 +3464,7 @@ fn kill_pid_tree(pid: u32) -> Result<(), String> {
             return Ok(());
         }
 
-        return Err(format!("结束 PID {pid} 失败: {detail}"));
+        Err(format!("结束 PID {pid} 失败: {detail}"))
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2865,7 +3793,12 @@ fn start_all_managed_processes(
 
     let mut errors = Vec::new();
 
-    for spec in &specs {
+    for spec in specs.iter().filter(|spec| {
+        !matches!(
+            spec.id,
+            "maicraft-next" | "forge-client" | "forge-agent" | "bilibili-live"
+        )
+    }) {
         let handle = handles
             .entry(spec.id.to_string())
             .or_insert_with(ManagedProcess::new);
@@ -2966,6 +3899,36 @@ fn prepare_stable_qq_login(
 }
 
 #[tauri::command]
+fn get_login_helper_config() -> LoginHelperConfig {
+    load_login_helper_config_inner()
+}
+
+#[tauri::command]
+fn save_login_helper_config(config: LoginHelperConfig) -> Result<LoginHelperConfig, String> {
+    let mut normalized = config;
+    normalized.recipient_email = normalize_owner_email(&normalized.recipient_email);
+    if normalized.smtp_from.trim().is_empty() && !normalized.smtp_username.trim().is_empty() {
+        normalized.smtp_from = normalized.smtp_username.trim().to_string();
+    }
+    if normalized.smtp_port == 0 {
+        normalized.smtp_port = LoginHelperConfig::default().smtp_port;
+    }
+    save_login_helper_config_inner(&normalized)?;
+    Ok(normalized)
+}
+
+#[tauri::command]
+fn get_login_helper_status() -> LoginHelperStatus {
+    let config = load_login_helper_config_inner();
+    build_login_helper_status(&config)
+}
+
+#[tauri::command]
+fn send_login_helper_email(request: SendLoginEmailRequest) -> Result<String, String> {
+    send_login_helper_email_inner(request)
+}
+
+#[tauri::command]
 fn get_realtime_screen_context() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -3056,6 +4019,221 @@ fn read_process_name(process_id: u32) -> String {
 }
 
 #[tauri::command]
+fn get_maicraft_config() -> MaicraftConfig {
+    load_maicraft_config_inner()
+}
+
+#[tauri::command]
+fn save_maicraft_config(config: MaicraftConfig) -> Result<MaicraftConfig, String> {
+    save_maicraft_config_inner(config)
+}
+
+fn forge_bridge_url(path: &str) -> String {
+    format!("http://127.0.0.1:25115{path}")
+}
+
+async fn forge_bridge_post_form(
+    path: &str,
+    params: Vec<(&'static str, String)>,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|err| format!("创建 Forge 桥接客户端失败: {err}"))?;
+    let response = client
+        .post(forge_bridge_url(path))
+        .form(&params)
+        .send()
+        .await
+        .map_err(|err| {
+            format!(
+                "Forge 桥接未连接。请先重启 Forge 真客户端并确认已加载 MaiBot Forge Bridge mod: {err}"
+            )
+        })?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("读取 Forge 桥接响应失败: {err}"))?;
+    if !status.is_success() {
+        return Err(format!("Forge 桥接返回错误 {status}: {text}"));
+    }
+    Ok(text)
+}
+
+#[tauri::command]
+async fn forge_bridge_status() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|err| format!("创建 Forge 桥接客户端失败: {err}"))?;
+    let response = client
+        .get(forge_bridge_url("/status"))
+        .send()
+        .await
+        .map_err(|err| {
+            format!(
+                "Forge 桥接未连接。请先重启 Forge 真客户端并确认已加载 MaiBot Forge Bridge mod: {err}"
+            )
+        })?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("读取 Forge 桥接状态失败: {err}"))?;
+    if !status.is_success() {
+        return Err(format!("Forge 桥接返回错误 {status}: {text}"));
+    }
+    Ok(text)
+}
+
+#[tauri::command]
+async fn forge_bridge_scan(
+    targets: Option<String>,
+    radius: Option<u16>,
+    limit: Option<u16>,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|err| format!("创建 Forge 桥接客户端失败: {err}"))?;
+    let response = client
+        .get(forge_bridge_url("/scan"))
+        .query(&[
+            ("targets", targets.unwrap_or_default()),
+            ("radius", radius.unwrap_or(8).to_string()),
+            ("limit", limit.unwrap_or(24).to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|err| {
+            format!(
+                "Forge 桥接未连接。请先重启 Forge 真客户端并确认已加载 MaiBot Forge Bridge mod: {err}"
+            )
+        })?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("读取 Forge 桥接扫描结果失败: {err}"))?;
+    if !status.is_success() {
+        return Err(format!("Forge 桥接返回错误 {status}: {text}"));
+    }
+    Ok(text)
+}
+
+#[tauri::command]
+async fn forge_bridge_command(request: ForgeBridgeCommandRequest) -> Result<String, String> {
+    let action = request.action.trim().to_ascii_lowercase();
+    if action.is_empty() {
+        return Err("Forge 桥接动作不能为空。".to_string());
+    }
+
+    let mut params = vec![("action", action)];
+    if let Some(value) = request.forward {
+        params.push(("forward", value.to_string()));
+    }
+    if let Some(value) = request.back {
+        params.push(("back", value.to_string()));
+    }
+    if let Some(value) = request.left {
+        params.push(("left", value.to_string()));
+    }
+    if let Some(value) = request.right {
+        params.push(("right", value.to_string()));
+    }
+    if let Some(value) = request.sprint {
+        params.push(("sprint", value.to_string()));
+    }
+    if let Some(value) = request.sneak {
+        params.push(("sneak", value.to_string()));
+    }
+    if let Some(value) = request.duration {
+        params.push(("duration", value.to_string()));
+    }
+    if let Some(value) = request.yaw {
+        params.push(("yaw", value.to_string()));
+    }
+    if let Some(value) = request.pitch {
+        params.push(("pitch", value.to_string()));
+    }
+    if let Some(value) = request.targets {
+        params.push(("targets", value));
+    }
+    if let Some(value) = request.radius {
+        params.push(("radius", value.to_string()));
+    }
+    if let Some(value) = request.timeout {
+        params.push(("timeout", value.to_string()));
+    }
+    if let Some(value) = request.x {
+        params.push(("x", value.to_string()));
+    }
+    if let Some(value) = request.y {
+        params.push(("y", value.to_string()));
+    }
+    if let Some(value) = request.z {
+        params.push(("z", value.to_string()));
+    }
+    if let Some(value) = request.length {
+        params.push(("length", value.to_string()));
+    }
+    if let Some(value) = request.width {
+        params.push(("width", value.to_string()));
+    }
+    if let Some(value) = request.height {
+        params.push(("height", value.to_string()));
+    }
+    if let Some(value) = request.depth {
+        params.push(("depth", value.to_string()));
+    }
+    if let Some(value) = request.input {
+        params.push(("input", value));
+    }
+    if let Some(value) = request.fuel {
+        params.push(("fuel", value));
+    }
+    if let Some(value) = request.block {
+        params.push(("block", value));
+    }
+    if let Some(value) = request.search {
+        params.push(("search", value));
+    }
+    if let Some(value) = request.model {
+        params.push(("model", value));
+    }
+    if let Some(value) = request.model_id {
+        params.push(("modelId", value));
+    }
+    if let Some(value) = request.texture {
+        params.push(("texture", value));
+    }
+    if let Some(value) = request.texture_id {
+        params.push(("textureId", value));
+    }
+    if let Some(value) = request.target {
+        params.push(("target", value));
+    }
+    if let Some(value) = request.ignore_auth {
+        params.push(("ignoreAuth", value.to_string()));
+    }
+    if let Some(value) = request.command {
+        params.push(("command", value));
+    }
+
+    forge_bridge_post_form("/command", params).await
+}
+
+#[tauri::command]
+async fn forge_bridge_chat(text: String) -> Result<String, String> {
+    let message = text.trim();
+    if message.is_empty() {
+        return Err("要发送到 Minecraft 的聊天内容不能为空。".to_string());
+    }
+    forge_bridge_post_form("/chat", vec![("text", message.to_string())]).await
+}
+
+#[tauri::command]
 fn get_voice_chat_config() -> VoiceChatConfig {
     load_voice_chat_config_inner()
 }
@@ -3074,6 +4252,77 @@ fn clear_voice_chat_history(state: tauri::State<VoiceChatState>) -> Result<(), S
         .map_err(|_| "语音对话上下文锁定失败".to_string())?;
     history.clear();
     Ok(())
+}
+
+async fn complete_voice_reply_turn(
+    transcript: String,
+    source_label: Option<&str>,
+    config: &VoiceChatConfig,
+    screen_context: Option<&str>,
+    state: &VoiceChatState,
+    asr_model: String,
+) -> Result<VoiceChatResponse, String> {
+    let history_snapshot = {
+        let history = state
+            .history
+            .lock()
+            .map_err(|_| "语音对话上下文锁定失败".to_string())?;
+        history.clone()
+    };
+
+    let output_language = config.output_language.trim();
+    let model_input = match source_label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(label) => format!("{label}：{transcript}"),
+        None => transcript.clone(),
+    };
+    let (reply_text, reply_model) = call_reply_model(
+        &model_input,
+        output_language,
+        &history_snapshot,
+        screen_context,
+    )
+    .await?;
+    if reply_text.trim().is_empty() {
+        return Err("回复模型返回为空。".to_string());
+    }
+
+    let audio = call_elaina_tts(&reply_text, config).await?;
+    let audio_base64 = general_purpose::STANDARD.encode(audio);
+    if let Err(err) = store_voice_turn_to_maibot_db(&model_input, &reply_text) {
+        eprintln!("[voice_chat] 写入 MaiBot 聊天记录失败: {err}");
+    }
+
+    {
+        let mut history = state
+            .history
+            .lock()
+            .map_err(|_| "语音对话上下文锁定失败".to_string())?;
+        history.push(VoiceChatMessage {
+            role: "user".to_string(),
+            content: model_input,
+        });
+        history.push(VoiceChatMessage {
+            role: "assistant".to_string(),
+            content: reply_text.clone(),
+        });
+        let max_messages = config.max_history_turns.max(1) * 2;
+        if history.len() > max_messages {
+            let drain_count = history.len() - max_messages;
+            history.drain(0..drain_count);
+        }
+    }
+
+    Ok(VoiceChatResponse {
+        transcript,
+        reply_text,
+        audio_base64,
+        audio_mime: "audio/wav".to_string(),
+        asr_model,
+        reply_model,
+    })
 }
 
 #[tauri::command]
@@ -3097,60 +4346,35 @@ async fn voice_chat_turn(
     .map_err(|err| format!("录音转码任务失败: {err}"))??;
     let transcript = call_doubao_asr(wav_audio, &request.config).await?;
 
-    let history_snapshot = {
-        let history = state
-            .history
-            .lock()
-            .map_err(|_| "语音对话上下文锁定失败".to_string())?;
-        history.clone()
-    };
-
-    let output_language = request.config.output_language.trim();
-    let (reply_text, reply_model) = call_reply_model(
-        &transcript,
-        output_language,
-        &history_snapshot,
-        request.screen_context.as_deref(),
-    )
-    .await?;
-    if reply_text.trim().is_empty() {
-        return Err("回复模型返回为空。".to_string());
-    }
-
-    let audio = call_elaina_tts(&reply_text, &request.config).await?;
-    let audio_base64 = general_purpose::STANDARD.encode(audio);
-    if let Err(err) = store_voice_turn_to_maibot_db(&transcript, &reply_text) {
-        eprintln!("[voice_chat] 写入 MaiBot 聊天记录失败: {err}");
-    }
-
-    {
-        let mut history = state
-            .history
-            .lock()
-            .map_err(|_| "语音对话上下文锁定失败".to_string())?;
-        history.push(VoiceChatMessage {
-            role: "user".to_string(),
-            content: transcript.clone(),
-        });
-        history.push(VoiceChatMessage {
-            role: "assistant".to_string(),
-            content: reply_text.clone(),
-        });
-        let max_messages = request.config.max_history_turns.max(1) * 2;
-        if history.len() > max_messages {
-            let drain_count = history.len() - max_messages;
-            history.drain(0..drain_count);
-        }
-    }
-
-    Ok(VoiceChatResponse {
+    complete_voice_reply_turn(
         transcript,
-        reply_text,
-        audio_base64,
-        audio_mime: "audio/wav".to_string(),
-        asr_model: request.config.asr_model,
-        reply_model,
-    })
+        None,
+        &request.config,
+        request.screen_context.as_deref(),
+        &state,
+        request.config.asr_model.clone(),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn voice_text_turn(
+    request: VoiceTextTurnRequest,
+    state: tauri::State<'_, VoiceChatState>,
+) -> Result<VoiceChatResponse, String> {
+    let transcript = request.text.trim().to_string();
+    if transcript.is_empty() {
+        return Err("文字内容为空，无法生成语音回复。".to_string());
+    }
+    complete_voice_reply_turn(
+        transcript,
+        request.source_label.as_deref(),
+        &request.config,
+        request.screen_context.as_deref(),
+        &state,
+        "text".to_string(),
+    )
+    .await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3171,11 +4395,22 @@ pub fn run() {
             deep_cleanup_process_state,
             get_login_stability_report,
             prepare_stable_qq_login,
+            get_login_helper_config,
+            save_login_helper_config,
+            get_login_helper_status,
+            send_login_helper_email,
             get_realtime_screen_context,
+            get_maicraft_config,
+            save_maicraft_config,
+            forge_bridge_status,
+            forge_bridge_scan,
+            forge_bridge_command,
+            forge_bridge_chat,
             get_voice_chat_config,
             save_voice_chat_config,
             clear_voice_chat_history,
-            voice_chat_turn
+            voice_chat_turn,
+            voice_text_turn
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

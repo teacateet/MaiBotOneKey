@@ -183,7 +183,16 @@ export function defaultVoiceConfig(): VoiceChatConfig {
     ttsPromptText: "視線を少し下にずらすと、門が見えました。私はそこにほうきを向かわせます。",
     ttsPromptLang: "ja",
     outputLanguage: "zh",
+    inputDeviceId: "",
+    inputDeviceLabelPattern: "",
+    outputDeviceId: "",
+    outputDeviceLabelPattern: "CABLE Input",
     maxHistoryTurns: 8,
+    bilibiliRoomId: "",
+    liveDanmakuReplyEnabled: false,
+    liveDanmakuCooldownSeconds: 18,
+    gameEventVoiceEnabled: false,
+    gameEventVoiceCooldownSeconds: 18,
   };
 }
 
@@ -222,13 +231,20 @@ export function normalizeAlertDetail(input: string) {
   return stripAnsiControlCodes(input).replace(/\s+/g, " ").trim();
 }
 
-export function findLatestLogMatch(logLines: string[], keywords: string[]) {
+export function findLatestLogMatch(
+  logLines: string[],
+  keywords: string[],
+  isRelevantLine: (normalizedLine: string, loweredLine: string) => boolean = () => true,
+) {
   const recentLines = logLines.slice(-OFFLINE_ALERT_LOG_WINDOW);
 
   for (let index = recentLines.length - 1; index >= 0; index -= 1) {
     const normalizedLine = normalizeAlertDetail(recentLines[index] ?? "");
     const loweredLine = normalizedLine.toLowerCase();
-    if (keywords.some((keyword) => loweredLine.includes(keyword.toLowerCase()))) {
+    if (
+      isRelevantLine(normalizedLine, loweredLine) &&
+      keywords.some((keyword) => loweredLine.includes(keyword.toLowerCase()))
+    ) {
       return normalizedLine;
     }
   }

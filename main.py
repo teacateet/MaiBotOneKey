@@ -40,20 +40,14 @@ def check_and_create_config_files() -> bool:
         },
         {
             'name': 'MaiBot主配置文件',
-            'path': get_absolute_path('modules/MaiBot/config/bot_config.toml'),  
-            'template': get_absolute_path('modules/MaiBot/template/bot_config_template.toml'),
+            'path': get_absolute_path('modules/MaiBot/config/bot_config.toml'),
+            'template': get_absolute_path('modules/MaiBot/config/bot_config.toml.1.0default'),
             'is_directory': False
         },
         {
             'name': 'MaiBot-模型配置文件',
             'path': get_absolute_path('modules/MaiBot/config/model_config.toml'),
-            'template': get_absolute_path('modules/MaiBot/template/model_config_template.toml'),
-            'is_directory': False
-        },
-        {
-            'name': 'MaiBot环境文件',
-            'path': get_absolute_path('modules/MaiBot/.env'),
-            'template': get_absolute_path('modules/MaiBot/template/template.env'),
+            'template': get_absolute_path('modules/MaiBot/config/model_config.toml.1.0default'),
             'is_directory': False
         },
         {

@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-set "RELEASE_EXE=%~dp0src-tauri\target\release\maibot_desktop.exe"
+set "RELEASE_EXE=%~dp0src-tauri\target\release\teabot_desktop.exe"
 if exist "%RELEASE_EXE%" (
   start "" "%RELEASE_EXE%"
   exit /b 0

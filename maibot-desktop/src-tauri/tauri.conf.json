@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "MaiBot Desktop",
+  "productName": "teabot",
   "version": "0.1.0",
-  "identifier": "org.maibot.desktop",
+  "identifier": "org.teabot.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "MaiBot Desktop",
+        "title": "teabot",
         "width": 1480,
         "height": 960,
         "minWidth": 1180,

@@ -344,7 +344,7 @@ def launch_adapter():
 def launch_main_bot():
     main_path = get_absolute_path('modules/MaiBot')
     python_path = get_absolute_path('runtime/python31211/bin/python.exe')
-    command = f'start http://localhost:8001 & "{python_path}" bot.py'
+    command = f'set MAIBOT_LEGACY_0X_UPGRADE_CONFIRMED=1 & start http://localhost:8001 & "{python_path}" bot.py'
     return create_cmd_window(main_path, command)
 
 def update_qq_in_config(config_path: str, qq_number: str):
@@ -491,23 +491,6 @@ def delete_maibot_memory():
         logger.error(f"错误：删除数据库文件时出现异常：{str(e)}")
         return False
 
-def migrate_database_from_old_version():
-    """从旧版本(0.6.x)迁移数据库到0.7.x版本"""
-    migration_script = get_absolute_path('modules/MaiBot/scripts/mongodb_to_sqlite.py')
-    if not os.path.exists(migration_script):
-        logger.error(f"错误：找不到迁移脚本 {migration_script}")
-        return False
-    try:
-        logger.info("正在从旧版本迁移数据库...")
-        logger.info("请在弹出的命令行窗口中查看迁移进度")
-        return create_cmd_window(
-            get_absolute_path('modules/MaiBot/scripts'), 
-            'python mongodb_to_sqlite.py'
-        )
-    except Exception as e:
-        logger.error(f"错误：启动数据库迁移时出现异常：{str(e)}")
-        return False
-
 def confirm_dangerous_operation(operation_name: str) -> bool:
     """确认危险操作
     
@@ -556,62 +539,6 @@ def delete_knowledge_base() -> bool:
         return True
     except Exception as e:
         logger.error(f"错误：删除知识库时出现异常：{str(e)}")
-        return False
-
-def import_openie_file():
-    """导入其他人的OpenIE文件"""
-    import_script = get_absolute_path('modules/MaiBot/scripts/import_openie.py')
-    if not os.path.exists(import_script):
-        logger.error(f"错误：找不到导入脚本 {import_script}")
-        return False
-    
-    try:
-        logger.info("正在启动OpenIE文件导入工具...")
-        logger.info("请在弹出的命令行窗口中按照提示选择要导入的文件")
-        # 使用内置的 Python 解释器
-        python_path = get_absolute_path('runtime/python31211/bin/python.exe')
-        return create_cmd_window(
-            get_absolute_path('modules/MaiBot'), 
-            f'"{python_path}" scripts/import_openie.py')
-    except Exception as e:
-        logger.error(f"错误：启动OpenIE导入工具时出现异常：{str(e)}")
-        return False
-
-def start_maibot_learning():
-    """麦麦开始学习（完整学习流程）"""
-    scripts_dir = get_absolute_path('modules/MaiBot/scripts')
-    
-    # 检查所需脚本是否存在
-    required_scripts = [
-        'info_extraction.py', 
-        'import_openie.py'
-    ]
-    
-    for script in required_scripts:
-        script_path = os.path.join(scripts_dir, script)
-        if not os.path.exists(script_path):
-            logger.error(f"错误：找不到学习脚本 {script_path}")
-            return False
-    
-    try:
-        logger.info("开始麦麦学习流程...")
-        logger.info("这将依次执行：数据预处理 → 信息提取 → OpenIE导入")
-        
-        # 使用内置的 Python 解释器
-        python_path = get_absolute_path('runtime/python31211/bin/python.exe')
-        
-        # 构建批处理命令，依次执行三个脚本，工作目录在MaiBot根目录
-        learning_command = (
-            f'"{python_path}" scripts/info_extraction.py && '
-            f'"{python_path}" scripts/import_openie.py && '
-            'echo. && echo 🎉 麦麦学习流程已完成！ && pause'
-        )
-        
-        logger.info("请在弹出的命令行窗口中查看学习进度")
-        return create_cmd_window(get_absolute_path('modules/MaiBot'), learning_command)
-        
-    except Exception as e:
-        logger.error(f"错误：启动麦麦学习流程时出现异常：{str(e)}")
         return False
 
 def get_hitokoto() -> tuple[Optional[str], Optional[str]]:
@@ -769,10 +696,7 @@ class MenuManager:
         # 数据管理功能组
         data_group = MenuGroup("数据管理功能：", [
             MenuItem("12", "麦麦删除所有记忆（删库）", lambda: log_operation_result("删除麦麦所有记忆", delete_maibot_memory())),
-            MenuItem("13", "从旧版(0.6.x)迁移数据库到0.8.x", lambda: log_operation_result("启动数据库迁移", migrate_database_from_old_version())),
             MenuItem("14", "麦麦知识忘光光（删除知识库）", lambda: log_operation_result("删除麦麦知识库", delete_knowledge_base())),
-            MenuItem("15", "导入其他人的OpenIE文件", lambda: log_operation_result("启动OpenIE文件导入工具", import_openie_file())),
-            MenuItem("16", "麦麦开始学习", lambda: log_operation_result("启动麦麦学习流程", start_maibot_learning())),
         ])
         
         # 其他功能组
@@ -932,7 +856,6 @@ def open_config_file() -> bool:
     config_files = [
         ("MaiBot主配置", get_absolute_path('modules/MaiBot/config/bot_config.toml')),
         ("MaiBot-模型配置", get_absolute_path('modules/MaiBot/config/model_config.toml')),
-        ("MaiBot环境文件(.env)", get_absolute_path('modules/MaiBot/.env')),
         ("NapCat适配器配置", get_absolute_path('modules/MaiBot-Napcat-Adapter/config.toml')),
         # 可以继续添加更多配置文件
     ]
@@ -977,20 +900,14 @@ def check_and_create_config_files() -> bool:
         },
         {
             'name': 'MaiBot主配置文件',
-            'path': get_absolute_path('modules/MaiBot/config/bot_config.toml'),  
-            'template': get_absolute_path('modules/MaiBot/template/bot_config_template.toml'),
+            'path': get_absolute_path('modules/MaiBot/config/bot_config.toml'),
+            'template': get_absolute_path('modules/MaiBot/config/bot_config.toml.1.0default'),
             'is_directory': False
         },
         {
             'name': 'MaiBot-模型配置文件',
             'path': get_absolute_path('modules/MaiBot/config/model_config.toml'),
-            'template': get_absolute_path('modules/MaiBot/template/model_config_template.toml'),
-            'is_directory': False
-        },
-        {
-            'name': 'MaiBot环境文件',
-            'path': get_absolute_path('modules/MaiBot/.env'),
-            'template': get_absolute_path('modules/MaiBot/template/template.env'),
+            'template': get_absolute_path('modules/MaiBot/config/model_config.toml.1.0default'),
             'is_directory': False
         },
         {

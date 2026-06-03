@@ -1,0 +1,60 @@
+# TeaBot 飞牛/Linux x86_64 三容器部署
+# 用法见同目录 README.md。所有配置/数据通过 volume 挂载，便于持久化与备份。
+# 构建上下文为仓库根（因为 Dockerfile 内 COPY 的是 modules/...）。
+services:
+  core:
+    container_name: teabot-core
+    build:
+      context: ../..
+      dockerfile: deploy/fnos/Dockerfile.core
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "8001:8001"   # WebUI
+    volumes:
+      - ./config/.env:/MaiMBot/.env                 # 容器专用 env（HOST=0.0.0.0）
+      - ./data/core/config:/MaiMBot/config          # bot/model 配置
+      - ./data/core/data:/MaiMBot/data              # 数据库等共享数据
+      - ./data/core/logs:/MaiMBot/logs              # 日志
+      - ../../modules/MaiBot/plugins:/MaiMBot/plugins  # 直接复用你的 28 个插件
+    restart: unless-stopped
+    networks:
+      - maim_bot
+
+  adapter:
+    container_name: teabot-adapter
+    build:
+      context: ../..
+      dockerfile: deploy/fnos/Dockerfile.adapter
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./config/adapter-config.toml:/adapters/config.toml  # 容器专用（host 指向服务名）
+      - ./data/adapter:/adapters/data
+    depends_on:
+      - core
+    restart: unless-stopped
+    networks:
+      - maim_bot
+
+  napcat:
+    container_name: teabot-napcat
+    image: mlikiowa/napcat-docker:latest
+    environment:
+      - NAPCAT_UID=1000
+      - NAPCAT_GID=1000
+      - TZ=Asia/Shanghai
+    ports:
+      - "6099:6099"   # NapCat WebUI（扫码登录）
+    volumes:
+      - ./data/napcat/config:/app/napcat/config
+      - ./data/napcat/qq:/app/.config/QQ
+    depends_on:
+      - adapter
+    restart: unless-stopped
+    networks:
+      - maim_bot
+
+networks:
+  maim_bot:
+    driver: bridge

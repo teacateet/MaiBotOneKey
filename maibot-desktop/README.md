@@ -1,4 +1,4 @@
-# MaiBot Desktop
+# TeaBot Desktop
 
 桌面控制台项目，目标是把 `MaiBot WebUI`、`NapCat WebUI` 和后续的进程管理、日志、重启、状态检测整合进一个 `React + Tauri` 应用。
 

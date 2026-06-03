@@ -1,0 +1,25 @@
+# TeaBot / MaiBot Core 镜像 —— 飞牛/Linux x86_64 专用
+# 用本仓库 modules/MaiBot 源码构建，LPMM 已在 bot_config 中禁用，故跳过 quick_algo 的 Cython 编译。
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    TZ=Asia/Shanghai
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /MaiMBot
+
+# git 供运行期可能的依赖拉取；构建期仅装 requirements
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY modules/MaiBot/requirements.txt ./requirements.txt
+RUN uv pip install --system --upgrade pip \
+    && uv pip install --system -r requirements.txt
+
+COPY modules/MaiBot/ .
+
+EXPOSE 8000 8001
+
+ENTRYPOINT ["python", "bot.py"]

@@ -96,6 +96,12 @@
   gap: 20px;
 }
 
+.module-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.05fr);
+  gap: 20px;
+}
+
 .view-switcher,
 .process-tab-row,
 .process-actions-bar,
@@ -110,7 +116,7 @@
   padding: 6px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: rgba(253, 252, 249, 0.68);
+  background: var(--surface-soft);
   box-shadow: var(--panel-shadow);
   width: fit-content;
 }
@@ -170,6 +176,12 @@
 
 .process-detail-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.module-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .process-card {
@@ -265,7 +277,7 @@
   box-sizing: border-box;
   border: 1px solid var(--border-color);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--input-bg);
   color: var(--title-color);
   padding: 13px 14px;
   font: inherit;
@@ -283,7 +295,7 @@
   box-sizing: border-box;
   border: 1px solid var(--border-color);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--input-bg);
   color: var(--title-color);
   padding: 13px 14px;
   font: inherit;
@@ -444,7 +456,7 @@
 .console-shell {
   border: 1px solid var(--border-color);
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--surface-soft);
 }
 
 .cleanup-banner {
@@ -468,6 +480,11 @@
   color: #14532d;
 }
 
+.state-pill--danger {
+  background: rgba(220, 38, 38, 0.14);
+  color: #7f1d1d;
+}
+
 .secondary-button--warning {
   border-color: rgba(245, 158, 11, 0.38);
   background: rgba(245, 158, 11, 0.14);
@@ -476,6 +493,27 @@
 .stability-risk-list {
   margin: 8px 0 0;
   padding-left: 18px;
+}
+
+.login-helper-panel {
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.14), transparent 30%),
+    radial-gradient(circle at bottom left, rgba(42, 104, 163, 0.12), transparent 28%),
+    var(--panel-color);
+}
+
+.login-helper-grid,
+.login-helper-form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-helper-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.login-helper-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .voice-status-card {
@@ -493,7 +531,7 @@
   gap: 12px;
   border: 1px solid rgba(42, 104, 163, 0.14);
   border-radius: 28px;
-  background: rgba(255, 255, 255, 0.54);
+  background: var(--surface-soft);
 }
 
 .voice-record-ring strong {
@@ -509,6 +547,141 @@
   background: rgba(42, 104, 163, 0.1);
   color: var(--muted-color);
   line-height: 1.6;
+}
+
+.module-note {
+  padding: 14px 16px;
+  border: 1px solid rgba(42, 104, 163, 0.16);
+  border-radius: 18px;
+  background: rgba(42, 104, 163, 0.08);
+  color: var(--text-color);
+  line-height: 1.7;
+}
+
+.forge-mode-toggle {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid rgba(22, 163, 74, 0.22);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(22, 163, 74, 0.13), transparent 42%),
+    rgba(255, 255, 255, 0.62);
+  color: var(--text-color);
+}
+
+.forge-mode-toggle input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  accent-color: #16824a;
+}
+
+.forge-mode-toggle span {
+  display: grid;
+  gap: 4px;
+}
+
+.forge-mode-toggle small {
+  color: var(--muted-color);
+  line-height: 1.55;
+}
+
+.live-voice-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(42, 104, 163, 0.16);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top right, rgba(247, 181, 71, 0.16), transparent 34%),
+    rgba(255, 255, 255, 0.5);
+}
+
+.live-voice-panel h3 {
+  margin: 0 0 6px;
+  color: var(--title-color);
+}
+
+.game-voice-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(22, 163, 74, 0.16);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top right, rgba(22, 163, 74, 0.14), transparent 34%),
+    rgba(255, 255, 255, 0.5);
+}
+
+.game-voice-panel h3 {
+  margin: 0;
+  color: var(--title-color);
+}
+
+.forge-bridge-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(42, 104, 163, 0.18);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(42, 104, 163, 0.16), transparent 32%),
+    rgba(255, 255, 255, 0.58);
+}
+
+.forge-bridge-panel__header,
+.forge-bridge-chat {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.forge-bridge-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.forge-bridge-panel h3 {
+  margin: 0;
+  color: var(--title-color);
+}
+
+.forge-bridge-stats,
+.forge-bridge-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.forge-bridge-stats span {
+  padding: 7px 10px;
+  border: 1px solid rgba(42, 104, 163, 0.14);
+  border-radius: 999px;
+  background: rgba(42, 104, 163, 0.07);
+  color: var(--text-color);
+  font-size: 13px;
+}
+
+.forge-bridge-chat input {
+  flex: 1;
+  min-width: 220px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 11px 14px;
+  background: var(--surface-soft);
+  color: var(--title-color);
+  font: inherit;
+  outline: none;
+}
+
+.forge-bridge-chat--multi input:nth-child(2) {
+  flex: 0.45;
+  min-width: 150px;
 }
 
 .voice-pulse {
@@ -544,7 +717,7 @@
   padding: 18px;
   border: 1px solid var(--border-color);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.76);
+  background: var(--surface-soft);
 }
 
 .voice-transcript,
@@ -772,15 +945,6 @@
     padding: 18px;
   }
 
-  .masthead,
-  .overview-grid,
-  .voice-hero-grid,
-  .voice-config-grid,
-  .process-overview-grid,
-  .process-detail-grid {
-    grid-template-columns: 1fr;
-  }
-
   .workspace-bar,
   .frame-toolbar,
   .service-header {
@@ -802,5 +966,24 @@
     bottom: 18px;
     left: 18px;
     width: auto;
+  }
+}
+
+/* 中等窄屏（平板 / 分屏）：多列网格先降为两列，避免 1080px 直接塌成单列后过于空旷 */
+@media (min-width: 769px) and (max-width: 1080px) {
+  .overview-grid,
+  .voice-hero-grid,
+  .module-hero-grid,
+  .voice-config-grid,
+  .login-helper-grid,
+  .login-helper-form,
+  .process-overview-grid,
+  .process-detail-grid,
+  .module-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .masthead {
+    grid-template-columns: 1fr;
   }
 }
